@@ -1,6 +1,9 @@
+import chalk from 'chalk';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { ShellRunComponent } from '#/tui/components/messages/shell-run';
+import { TAIL_FULL_WRAP_MAX_CHARS } from '#/tui/constant/rendering';
+import { currentTheme } from '#/tui/theme';
 
 function stripTheme(text: string): string {
   return text.replaceAll(/\u001B\[[0-9;]*m/g, '');
@@ -192,6 +195,34 @@ describe('ShellRunComponent collapse/expand', () => {
     const rendered = stripTheme(c.render(100).join('\n'));
     expect(rendered).toMatch(/\bline 1\b/);
     expect(rendered).not.toContain('earlier lines');
+  });
+
+  it('keeps stderr error colors in the collapsed tail above the full-wrap limit', () => {
+    const previousLevel = chalk.level;
+    chalk.level = 3;
+    try {
+      const c = create();
+      const stdoutLines = Math.ceil(TAIL_FULL_WRAP_MAX_CHARS / 100) + 30;
+      const stdout = Array.from(
+        { length: stdoutLines },
+        (_, i) => `out ${String(i + 1)} ${'o'.repeat(90)}`,
+      ).join('\n');
+      const stderr = Array.from({ length: 30 }, (_, i) => `err ${String(i + 1)}`).join('\n');
+
+      c.finish(stdout, stderr, true);
+
+      // The collapsed tail is sliced from the formatted (pre-colored) output;
+      // the error color must survive the slice.
+      const errorOpen = currentTheme.fg('error', 'probe').split('probe')[0]!;
+      expect(errorOpen).toContain('\u001B[');
+      const rendered = c.render(100);
+      const tailRow = rendered.find((line) => line.includes('err 30'));
+      expect(tailRow).toBeDefined();
+      expect(tailRow).toContain(errorOpen);
+      expect(stripTheme(rendered.join('\n'))).toContain('earlier lines');
+    } finally {
+      chalk.level = previousLevel;
+    }
   });
 
   it('renders the capped buffer without throwing while expanded', () => {
