@@ -144,10 +144,16 @@ export class TruncatedOutputComponent implements Component {
     for (const line of lines) {
       // Mirror Text.render's tab expansion so the count matches the real wrap.
       const normalized = line.includes('\t') ? line.replaceAll('\t', '   ') : line;
-      const rows =
-        visibleWidth(normalized) <= contentWidth
-          ? 1
-          : wrapTextWithAnsi(normalized, contentWidth).length;
+      let rows: number;
+      if (visibleWidth(normalized) <= contentWidth) {
+        rows = 1;
+      } else if (/^[\x21-\x7E]+$/.test(normalized)) {
+        // A single printable-ASCII token wraps by hard character break, so
+        // arithmetic gives the exact row count without materializing it.
+        rows = Math.ceil(normalized.length / contentWidth);
+      } else {
+        rows = wrapTextWithAnsi(normalized, contentWidth).length;
+      }
       rowCounts.push(rows);
       total += rows;
     }
