@@ -1233,6 +1233,7 @@ export class KimiTUI {
       content: '',
     };
     const outputComponent = new ShellRunComponent(() => this.state.ui.requestRender());
+    if (this.state.toolOutputExpanded) outputComponent.setExpanded(true);
     this.shellOutputStreams.set(commandId, { entry: outputEntry, component: outputComponent });
     this.state.transcriptEntries.push(outputEntry);
     markTranscriptComponent(outputComponent, outputEntry);
@@ -2764,6 +2765,18 @@ export class KimiTUI {
           ? new NoticeMessageComponent(entry.content, entry.detail)
           : new StatusMessageComponent(entry.content, entry.color);
       case 'status':
+        if (entry.shellOutputData !== undefined) {
+          const component = new ShellRunComponent(() => {
+            this.state.ui.requestRender();
+          });
+          component.finish(
+            entry.shellOutputData.stdout,
+            entry.shellOutputData.stderr,
+            entry.shellOutputData.isError,
+          );
+          if (this.state.toolOutputExpanded) component.setExpanded(true);
+          return component;
+        }
         if (entry.backgroundAgentStatus !== undefined) {
           return new BackgroundAgentStatusComponent(entry.backgroundAgentStatus);
         }

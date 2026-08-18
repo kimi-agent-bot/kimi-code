@@ -1,5 +1,6 @@
-import { Text, truncateToWidth, type Component } from '@moonshot-ai/pi-tui';
+import { Text, truncateToWidth, visibleWidth, wrapTextWithAnsi, type Component } from '@moonshot-ai/pi-tui';
 
+import { TAIL_FULL_WRAP_MAX_CHARS } from '#/tui/constant/rendering';
 import { currentTheme } from '#/tui/theme';
 import type { ColorPalette } from '#/tui/theme/colors';
 
@@ -26,11 +27,15 @@ export function trimTrailingEmptyLines(lines: string[]): string[] {
  */
 export class TruncatedOutputComponent implements Component {
   private textComponent: Text;
-  private readonly expanded: boolean;
+  private readonly plainOutput: string;
+  private readonly isError: boolean;
+  private readonly successColor: keyof ColorPalette;
+  private expanded: boolean;
   private readonly maxLines: number;
   private readonly indent: number;
   private readonly expandHint: boolean;
   private readonly tail: boolean;
+  private tailCache?: { width: number; rows: string[]; total: number };
 
   constructor(
     output: string,
@@ -57,17 +62,24 @@ export class TruncatedOutputComponent implements Component {
     this.expandHint = options.expandHint ?? true;
     this.tail = options.tail ?? false;
     const cleaned = trimTrailingEmptyLines(output.split('\n')).join('\n');
-    const successColor = options.color ?? 'textDim';
-    this.textComponent = new Text(
-      options.isError ? currentTheme.fg('error', cleaned) : currentTheme.fg(successColor, cleaned),
-      this.indent,
-      0,
-    );
+    this.plainOutput = cleaned;
+    this.isError = options.isError ?? false;
+    this.successColor = options.color ?? 'textDim';
+    this.textComponent = new Text(this.colorize(cleaned), this.indent, 0);
+  }
+
+  setExpanded(expanded: boolean): void {
+    this.expanded = expanded;
   }
 
   invalidate(): void {
-    // Text component caches wrapped lines; invalidate on terminal resize.
+    // Both caches are width-dependent; invalidate on terminal resize.
+    this.tailCache = undefined;
     this.textComponent.invalidate();
+  }
+
+  private colorize(text: string): string {
+    return this.isError ? currentTheme.fg('error', text) : currentTheme.fg(this.successColor, text);
   }
 
   private renderHint(width: number, hint: string): string {
@@ -77,6 +89,10 @@ export class TruncatedOutputComponent implements Component {
   }
 
   render(width: number): string[] {
+    if (!this.expanded && this.tail && this.plainOutput.length > TAIL_FULL_WRAP_MAX_CHARS) {
+      return this.renderBoundedTail(width);
+    }
+
     const contentLines = this.textComponent.render(width);
 
     if (this.expanded || contentLines.length <= this.maxLines) {
@@ -86,10 +102,7 @@ export class TruncatedOutputComponent implements Component {
     const remaining = contentLines.length - this.maxLines;
     if (this.tail) {
       const shown = contentLines.slice(contentLines.length - this.maxLines);
-      return [
-        this.renderHint(width, `... (${String(remaining)} earlier lines)`),
-        ...shown,
-      ];
+      return [this.renderHint(width, this.tailHint(remaining)), ...shown];
     }
 
     const shown = contentLines.slice(0, this.maxLines);
@@ -97,6 +110,55 @@ export class TruncatedOutputComponent implements Component {
       ? `... (${String(remaining)} more lines, ctrl+o to expand)`
       : `... (${String(remaining)} more lines)`;
     return [...shown, this.renderHint(width, hint)];
+  }
+
+  private tailHint(remaining: number): string {
+    return this.expandHint
+      ? `... (${String(remaining)} earlier lines, ctrl+o to expand)`
+      : `... (${String(remaining)} earlier lines)`;
+  }
+
+  // Large-output collapsed tail: count visual rows per logical line (cheap —
+  // a fitting line cannot be split), wrap only the trailing lines that cover
+  // the preview. Must render identically to wrapping everything and slicing
+  // the last maxLines rows.
+  private renderBoundedTail(width: number): string[] {
+    if (this.tailCache === undefined || this.tailCache.width !== width) {
+      this.tailCache = this.computeBoundedTail(width);
+    }
+    const { rows, total } = this.tailCache;
+    if (total <= this.maxLines) {
+      return rows;
+    }
+    const shown = rows.slice(rows.length - this.maxLines);
+    return [this.renderHint(width, this.tailHint(total - this.maxLines)), ...shown];
+  }
+
+  private computeBoundedTail(width: number): { width: number; rows: string[]; total: number } {
+    const contentWidth = Math.max(1, width - this.indent * 2);
+    // Split on the same line-ending set as wrapTextWithAnsi so the per-line
+    // counts match the full wrap.
+    const lines = this.plainOutput.split(/\r\n|\r|\n/);
+    const rowCounts: number[] = [];
+    let total = 0;
+    for (const line of lines) {
+      // Mirror Text.render's tab expansion so the count matches the real wrap.
+      const normalized = line.includes('\t') ? line.replaceAll('\t', '   ') : line;
+      const rows =
+        visibleWidth(normalized) <= contentWidth
+          ? 1
+          : wrapTextWithAnsi(normalized, contentWidth).length;
+      rowCounts.push(rows);
+      total += rows;
+    }
+    let kept = 0;
+    let keptRows = 0;
+    for (let i = lines.length - 1; i >= 0 && keptRows < this.maxLines; i--) {
+      keptRows += rowCounts[i]!;
+      kept++;
+    }
+    const tailText = new Text(this.colorize(lines.slice(lines.length - kept).join('\n')), this.indent, 0);
+    return { width, rows: tailText.render(width), total };
   }
 }
 

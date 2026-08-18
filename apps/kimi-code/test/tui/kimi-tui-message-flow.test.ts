@@ -132,6 +132,7 @@ interface MessageDriver {
   };
   init(): Promise<boolean>;
   handleUserInput(text: string): void;
+  handleShellOutput(event: { commandId: string; update: { kind: string; text?: string } }): void;
   persistInputHistory(text: string): Promise<void>;
   sendQueuedMessage(session: unknown, item: QueuedMessage): void;
   recallLastQueued(): QueuedMessage | undefined;
@@ -4206,6 +4207,201 @@ command = "vim"
     const transcript = stripSgr(driver.state.transcriptContainer.render(120).join('\n'));
     expect(transcript).toContain('$ ls');
     expect(transcript).not.toContain('! ls');
+  });
+
+  it('collapses long ! command output to the last 20 lines with an expand hint', async () => {
+    const runShellCommand = vi.fn(async () => ({
+      stdout: Array.from({ length: 30 }, (_, i) => `out ${String(i + 1)}`).join('\n'),
+      stderr: '',
+      isError: false,
+    }));
+    const session = makeSession({ runShellCommand });
+    const { driver } = await makeDriver(session);
+    driver.state.appState.inputMode = 'bash';
+    driver.state.editor.inputMode = 'bash';
+
+    driver.handleUserInput('seq 30');
+
+    await vi.waitFor(() => {
+      expect(stripSgr(renderTranscript(driver))).toContain('earlier lines');
+    });
+    const transcript = stripSgr(renderTranscript(driver));
+    expect(transcript).toContain('... (10 earlier lines, ctrl+o to expand)');
+    expect(transcript).toContain('out 30');
+    expect(transcript).toContain('out 11');
+    expect(transcript).not.toContain('out 10');
+  });
+
+  it('renders short ! command output in full without a marker', async () => {
+    const runShellCommand = vi.fn(async () => ({
+      stdout: Array.from({ length: 5 }, (_, i) => `out ${String(i + 1)}`).join('\n'),
+      stderr: '',
+      isError: false,
+    }));
+    const session = makeSession({ runShellCommand });
+    const { driver } = await makeDriver(session);
+    driver.state.appState.inputMode = 'bash';
+    driver.state.editor.inputMode = 'bash';
+
+    driver.handleUserInput('seq 5');
+
+    await vi.waitFor(() => {
+      expect(stripSgr(renderTranscript(driver))).toContain('out 5');
+    });
+    const transcript = stripSgr(renderTranscript(driver));
+    expect(transcript).toMatch(/\bout 1\b/);
+    expect(transcript).not.toContain('earlier lines');
+  });
+
+  it('toggles ! output and agent tool output together with ctrl+o', async () => {
+    const runShellCommand = vi.fn(async () => ({
+      stdout: Array.from({ length: 30 }, (_, i) => `shell ${String(i + 1)}`).join('\n'),
+      stderr: '',
+      isError: false,
+    }));
+    const session = makeSession({ runShellCommand });
+    const { driver } = await makeDriver(session);
+
+    driver.sessionEventHandler.handleEvent(
+      {
+        type: 'tool.call.started',
+        agentId: 'main',
+        sessionId: 'ses-1',
+        turnId: 1,
+        toolCallId: 'call_bash',
+        name: 'Bash',
+        args: { command: 'make' },
+      } as Event,
+      vi.fn(),
+    );
+    driver.sessionEventHandler.handleEvent(
+      {
+        type: 'tool.result',
+        agentId: 'main',
+        sessionId: 'ses-1',
+        turnId: 1,
+        toolCallId: 'call_bash',
+        output: Array.from({ length: 30 }, (_, i) => `agent ${String(i + 1)}`).join('\n'),
+        isError: false,
+      } as Event,
+      vi.fn(),
+    );
+
+    driver.state.appState.streamingPhase = 'idle';
+    driver.state.appState.inputMode = 'bash';
+    driver.state.editor.inputMode = 'bash';
+    driver.handleUserInput('seq 30');
+
+    await vi.waitFor(() => {
+      expect(stripSgr(renderTranscript(driver))).toContain('earlier lines');
+    });
+    const collapsed = stripSgr(renderTranscript(driver));
+    expect(collapsed).toContain('shell 30');
+    expect(collapsed).not.toContain('shell 10');
+    expect(collapsed).toContain('agent 1');
+    expect(collapsed).not.toContain('agent 30');
+
+    driver.state.editor.onToggleToolExpand?.();
+    const expanded = stripSgr(renderTranscript(driver));
+    expect(expanded).toMatch(/\bshell 1\b/);
+    expect(expanded).toContain('agent 30');
+
+    driver.state.editor.onToggleToolExpand?.();
+    const recollapsed = stripSgr(renderTranscript(driver));
+    expect(recollapsed).not.toContain('shell 10');
+    expect(recollapsed).not.toContain('agent 30');
+  });
+
+  it('expands live output of a running ! command with ctrl+o', async () => {
+    let resolveCommand: ((result: { stdout: string; stderr: string; isError: boolean }) => void) | undefined;
+    const runShellCommand = vi.fn(
+      (_command: string, _options: { commandId: string }) =>
+        new Promise<{ stdout: string; stderr: string; isError: boolean }>((resolve) => {
+          resolveCommand = resolve;
+        }),
+    );
+    const session = makeSession({ runShellCommand });
+    const { driver } = await makeDriver(session);
+    driver.state.appState.inputMode = 'bash';
+    driver.state.editor.inputMode = 'bash';
+
+    driver.handleUserInput('seq 30');
+    await vi.waitFor(() => {
+      expect(runShellCommand).toHaveBeenCalled();
+    });
+    const commandId = runShellCommand.mock.calls[0]![1].commandId;
+    driver.handleShellOutput({
+      commandId,
+      update: {
+        kind: 'stdout',
+        text: Array.from({ length: 30 }, (_, i) => `out ${String(i + 1)}`).join('\n'),
+      },
+    });
+
+    const running = stripSgr(renderTranscript(driver));
+    expect(running).toContain('+10 lines');
+    expect(running).not.toContain('out 10');
+
+    driver.state.editor.onToggleToolExpand?.();
+    const expanded = stripSgr(renderTranscript(driver));
+    expect(expanded).toMatch(/\bout 1\b/);
+    expect(expanded).toContain('out 30');
+
+    resolveCommand!({
+      stdout: Array.from({ length: 30 }, (_, i) => `out ${String(i + 1)}`).join('\n'),
+      stderr: '',
+      isError: false,
+    });
+    await vi.waitFor(() => {
+      expect(stripSgr(renderTranscript(driver))).not.toContain('ctrl+b to run in background');
+    });
+    const finished = stripSgr(renderTranscript(driver));
+    expect(finished).toMatch(/\bout 1\b/);
+    expect(finished).not.toContain('earlier lines');
+  });
+
+  it('does not auto-expand failed ! command output', async () => {
+    const runShellCommand = vi.fn(async () => ({
+      stdout: Array.from({ length: 30 }, (_, i) => `out ${String(i + 1)}`).join('\n'),
+      stderr: 'boom',
+      isError: true,
+    }));
+    const session = makeSession({ runShellCommand });
+    const { driver } = await makeDriver(session);
+    driver.state.appState.inputMode = 'bash';
+    driver.state.editor.inputMode = 'bash';
+
+    driver.handleUserInput('seq 30');
+
+    await vi.waitFor(() => {
+      expect(stripSgr(renderTranscript(driver))).toContain('earlier lines');
+    });
+    const transcript = stripSgr(renderTranscript(driver));
+    expect(transcript).toContain('boom');
+    expect(transcript).not.toContain('out 10');
+  });
+
+  it('expands ! command output immediately when the ctrl+o toggle is already active', async () => {
+    const runShellCommand = vi.fn(async () => ({
+      stdout: Array.from({ length: 30 }, (_, i) => `out ${String(i + 1)}`).join('\n'),
+      stderr: '',
+      isError: false,
+    }));
+    const session = makeSession({ runShellCommand });
+    const { driver } = await makeDriver(session);
+    driver.state.editor.onToggleToolExpand?.();
+    expect(driver.state.toolOutputExpanded).toBe(true);
+    driver.state.appState.inputMode = 'bash';
+    driver.state.editor.inputMode = 'bash';
+
+    driver.handleUserInput('seq 30');
+
+    await vi.waitFor(() => {
+      expect(stripSgr(renderTranscript(driver))).toContain('out 30');
+    });
+    const transcript = stripSgr(renderTranscript(driver));
+    expect(transcript).toMatch(/\bout 1\b/);
+    expect(transcript).not.toContain('earlier lines');
   });
 
   it('renders cron fired events as distinct transcript entries', async () => {

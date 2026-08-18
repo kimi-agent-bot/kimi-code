@@ -21,6 +21,15 @@ export const RESULT_PREVIEW_LINES = 3;
 export const THINKING_PREVIEW_LINES = 2;
 export const COMMAND_PREVIEW_LINES = 10;
 
+// Above this size, collapsed tail-mode previews wrap only the needed tail
+// instead of the whole output (the hidden-line count stays exact).
+export const TAIL_FULL_WRAP_MAX_CHARS = 256 * 1024;
+
+// Preview tail size for a user-initiated `!` shell command, shared by the
+// running card and the collapsed finished view (both count visual rows) so
+// the view keeps the same height when the command finishes.
+export const SHELL_OUTPUT_TAIL_LINES = 20;
+
 // Cap on the step-retry detail line under the waiting spinner, so huge
 // provider error bodies (occasionally whole HTML error pages) can't flood
 // the activity pane.

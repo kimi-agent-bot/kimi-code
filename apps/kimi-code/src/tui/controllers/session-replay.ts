@@ -355,8 +355,15 @@ export class SessionReplayRenderer {
       } else {
         const stdout = (extractBashTag(text, 'bash-stdout') ?? '').trim();
         const stderr = (extractBashTag(text, 'bash-stderr') ?? '').trim();
-        const out = formatBashOutputForDisplay(stdout, stderr, message.origin.isError);
-        this.host.appendTranscriptEntry(replayEntry(context, 'status', out, 'plain'));
+        this.host.appendTranscriptEntry(
+          replayEntry(
+            context,
+            'status',
+            formatBashOutputForDisplay(stdout, stderr, message.origin.isError),
+            'plain',
+            { shellOutputData: { stdout, stderr, isError: message.origin.isError } },
+          ),
+        );
       }
       return;
     }

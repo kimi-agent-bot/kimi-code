@@ -13,6 +13,7 @@ import { limitAgentReplayByTurns } from '@moonshot-ai/kimi-code-sdk';
 import type {
   AppState,
   BackgroundAgentMetadata,
+  ShellOutputTranscriptData,
   SkillActivationTrigger,
   ToolCallBlockData,
   TranscriptEntry,
@@ -173,7 +174,7 @@ export function replayEntry(
   kind: TranscriptEntry['kind'],
   content: string,
   renderMode: TranscriptEntry['renderMode'],
-  extras: { detail?: string; bullet?: string } = {},
+  extras: { detail?: string; bullet?: string; shellOutputData?: ShellOutputTranscriptData } = {},
 ): TranscriptEntry {
   return {
     id: nextTranscriptId(),
@@ -183,6 +184,7 @@ export function replayEntry(
     content,
     detail: extras.detail,
     bullet: extras.bullet,
+    shellOutputData: extras.shellOutputData,
   };
 }
 

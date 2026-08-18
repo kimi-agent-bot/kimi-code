@@ -183,6 +183,13 @@ export interface CronTranscriptData {
   readonly missedCount?: number;
 }
 
+/** Captured output of a user-initiated `!` shell command, replayed as a finished ShellRunComponent. */
+export interface ShellOutputTranscriptData {
+  readonly stdout: string;
+  readonly stderr: string;
+  readonly isError?: boolean;
+}
+
 export type GoalTranscriptData =
   | { readonly kind: 'created' }
   | { readonly kind: 'lifecycle'; readonly change: GoalChange };
@@ -231,6 +238,7 @@ export interface TranscriptEntry {
   compactionData?: CompactionTranscriptData;
   cronData?: CronTranscriptData;
   goalData?: GoalTranscriptData;
+  shellOutputData?: ShellOutputTranscriptData;
   imageAttachmentIds?: readonly number[];
   skillActivationId?: string;
   skillName?: string;

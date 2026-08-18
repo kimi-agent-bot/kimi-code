@@ -389,6 +389,46 @@ describe('KimiTUI resume message replay', () => {
     expect(transcript).toContain('pre</bash-stdout>post');
   });
 
+  it('collapses replayed shell command output to the last 20 lines', async () => {
+    const stdout = Array.from({ length: 30 }, (_, i) => `out ${String(i + 1)}`).join('\n');
+    const driver = await replayIntoDriver([
+      message('user', [{ type: 'text', text: '<bash-input>seq 30</bash-input>' }], {
+        origin: { kind: 'shell_command', phase: 'input' },
+      }),
+      message(
+        'user',
+        [{ type: 'text', text: `<bash-stdout>${stdout}</bash-stdout><bash-stderr></bash-stderr>` }],
+        { origin: { kind: 'shell_command', phase: 'output' } },
+      ),
+    ]);
+
+    const transcript = stripAnsi(driver.state.transcriptContainer.render(140).join('\n'));
+    expect(transcript).toContain('... (10 earlier lines, ctrl+o to expand)');
+    expect(transcript).toContain('out 30');
+    expect(transcript).toContain('out 11');
+    expect(transcript).not.toContain('out 10');
+  });
+
+  it('expands replayed shell command output with ctrl+o', async () => {
+    const stdout = Array.from({ length: 30 }, (_, i) => `out ${String(i + 1)}`).join('\n');
+    const driver = await replayIntoDriver([
+      message('user', [{ type: 'text', text: '<bash-input>seq 30</bash-input>' }], {
+        origin: { kind: 'shell_command', phase: 'input' },
+      }),
+      message(
+        'user',
+        [{ type: 'text', text: `<bash-stdout>${stdout}</bash-stdout><bash-stderr></bash-stderr>` }],
+        { origin: { kind: 'shell_command', phase: 'output' } },
+      ),
+    ]);
+
+    driver.state.editor.onToggleToolExpand?.();
+
+    const transcript = stripAnsi(driver.state.transcriptContainer.render(140).join('\n'));
+    expect(transcript).toMatch(/\bout 1\b/);
+    expect(transcript).not.toContain('earlier lines');
+  });
+
   it('does not render neutral goal completion context reminders as transcript messages', async () => {
     const driver = await replayIntoDriver([
       message(
