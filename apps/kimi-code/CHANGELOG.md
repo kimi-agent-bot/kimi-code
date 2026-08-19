@@ -1,5 +1,27 @@
 # @moonshot-ai/kimi-code
 
+## 0.38.0
+
+### Minor Changes
+
+- [#3060](https://github.com/MoonshotAI/kimi-code/pull/3060) [`8440801`](https://github.com/MoonshotAI/kimi-code/commit/8440801de47ddae29224430048e1228b80cde370) Thanks [@chengluyu](https://github.com/chengluyu)! - Add the WaitFor tool: the agent can now wait for a background task (sub-agent, background bash, or background question) inside the current turn — with an optional task ID and a required timeout of up to 600 seconds — instead of ending the turn and being re-invoked.
+
+### Patch Changes
+
+- [#3052](https://github.com/MoonshotAI/kimi-code/pull/3052) [`6595a69`](https://github.com/MoonshotAI/kimi-code/commit/6595a6989a68163e10a85c8edf1726b30d6d2c2b) Thanks [@RealKai42](https://github.com/RealKai42)! - Fix 422 errors from some OpenAI-compatible providers when a conversation includes tool calls.
+
+- [#3083](https://github.com/MoonshotAI/kimi-code/pull/3083) [`571bcc2`](https://github.com/MoonshotAI/kimi-code/commit/571bcc2f751f02a37b0475b074a1e859c7fc4368) Thanks [@7Sageer](https://github.com/7Sageer)! - Fix the missing OAuth authenticate tool for remote MCP servers that require login.
+
+- [#3005](https://github.com/MoonshotAI/kimi-code/pull/3005) [`be8e017`](https://github.com/MoonshotAI/kimi-code/commit/be8e017597b83142282d7e6640076368bf244eae) Thanks [@wbxl2000](https://github.com/wbxl2000)! - Emit subagent.spawned after the run's task registration so the signal carries the task id clients bind cancel/status actions to.
+
+- [#3046](https://github.com/MoonshotAI/kimi-code/pull/3046) [`f13f379`](https://github.com/MoonshotAI/kimi-code/commit/f13f3790448f64448c76a415500041443ae754e6) Thanks [@7Sageer](https://github.com/7Sageer)! - Stop recommending specific other tools in Read tool descriptions and error messages, which could point models to tools that are not available.
+
+- [#3088](https://github.com/MoonshotAI/kimi-code/pull/3088) [`38a5a93`](https://github.com/MoonshotAI/kimi-code/commit/38a5a934aed8069fe11ad0b74e70b5bd0f4c0499) Thanks [@wbxl2000](https://github.com/wbxl2000)! - Project prompt attachments into the live transcript (turn.started now carries session-media references) and clear the transcript goal when the goal is cleared.
+
+- [#3066](https://github.com/MoonshotAI/kimi-code/pull/3066) [`01eeacb`](https://github.com/MoonshotAI/kimi-code/commit/01eeacb59bed879b4e843c92545ab69d6d09205b) Thanks [@chengluyu](https://github.com/chengluyu)! - Show a live status line with elapsed time and remaining task count while the WaitFor tool is waiting.
+
+- [#3066](https://github.com/MoonshotAI/kimi-code/pull/3066) [`01eeacb`](https://github.com/MoonshotAI/kimi-code/commit/01eeacb59bed879b4e843c92545ab69d6d09205b) Thanks [@chengluyu](https://github.com/chengluyu)! - Improve the WaitFor tool's transcript display: the header shows the waited task and its outcome, and the body summarizes the finished task, other tasks that completed during the wait, and tasks still running, instead of dumping raw fields.
+
 ## 0.37.2
 
 ### Patch Changes
