@@ -540,6 +540,239 @@ export async function cropImageForModel(
   }
 }
 
+export interface ImageZoomPoint {
+  readonly x: number;
+  readonly y: number;
+}
+
+export interface ImageZoomArrowAnnotation {
+  readonly type: 'arrow';
+  readonly from: ImageZoomPoint;
+  readonly to: ImageZoomPoint;
+  readonly color?: string;
+  readonly label?: string;
+}
+
+export interface ImageZoomBoxAnnotation {
+  readonly type: 'box';
+  readonly x: number;
+  readonly y: number;
+  readonly width: number;
+  readonly height: number;
+  readonly color?: string;
+  readonly label?: string;
+}
+
+export interface ImageZoomDotAnnotation {
+  readonly type: 'dot';
+  readonly x: number;
+  readonly y: number;
+  readonly radius?: number;
+  readonly color?: string;
+  readonly label?: string;
+}
+
+export interface ImageZoomLabelAnnotation {
+  readonly type: 'label';
+  readonly x: number;
+  readonly y: number;
+  readonly text: string;
+  readonly color?: string;
+}
+
+export type ImageZoomAnnotation =
+  | ImageZoomArrowAnnotation
+  | ImageZoomBoxAnnotation
+  | ImageZoomDotAnnotation
+  | ImageZoomLabelAnnotation;
+
+export interface ZoomImageOptions extends CompressImageOptions {
+  readonly region?: ImageCropRegion;
+  readonly zoom?: number;
+  readonly annotations?: readonly ImageZoomAnnotation[];
+}
+
+export interface ZoomImageSuccess {
+  readonly ok: true;
+  readonly data: Uint8Array;
+  readonly mimeType: string;
+  readonly width: number;
+  readonly height: number;
+  readonly originalWidth: number;
+  readonly originalHeight: number;
+  readonly region: ImageCropRegion;
+  readonly zoom: number;
+  readonly annotationCount: number;
+  readonly originalByteLength: number;
+  readonly finalByteLength: number;
+}
+
+export interface ZoomImageFailure {
+  readonly ok: false;
+  readonly error: string;
+}
+
+export type ZoomImageOutcome = ZoomImageSuccess | ZoomImageFailure;
+
+export async function zoomImageForModel(
+  bytes: Uint8Array,
+  mimeType: string,
+  options: ZoomImageOptions = {},
+): Promise<ZoomImageOutcome> {
+  const startedAt = Date.now();
+  const maxEdge = options.maxEdge ?? resolveMaxImageEdgePx();
+  const byteBudget = options.byteBudget ?? IMAGE_BYTE_BUDGET;
+  const maxDecodeBytes = options.maxDecodeBytes ?? MAX_IMAGE_DECODE_BYTES;
+  const normalizedMime = normalizeImageMime(mimeType);
+
+  const fail = (errorKind: ZoomErrorKind, error: string): ZoomImageFailure => {
+    reportZoomEvent(options.telemetry, { startedAt, ok: false, errorKind });
+    return { ok: false, error };
+  };
+  const succeed = (result: ZoomImageSuccess): ZoomImageSuccess => {
+    reportZoomEvent(options.telemetry, { startedAt, ok: true, result });
+    return result;
+  };
+
+  if (bytes.length === 0) {
+    return fail('empty', 'The image is empty.');
+  }
+  if (!RECODABLE_MIME.has(normalizedMime)) {
+    return fail(
+      'unsupported_format',
+      `Zoom is only supported for PNG, JPEG, and WebP images; got ${mimeType}.`,
+    );
+  }
+  if (normalizedMime === 'image/webp' && isAnimatedWebp(bytes)) {
+    return fail('unsupported_format', 'Zoom is not supported for animated WebP images.');
+  }
+  if (options.zoom !== undefined && (!Number.isFinite(options.zoom) || options.zoom <= 0)) {
+    return fail('zoom_invalid', `Zoom must be a positive finite number; got ${String(options.zoom)}.`);
+  }
+  if (
+    options.region !== undefined &&
+    ![options.region.x, options.region.y, options.region.width, options.region.height].every(
+      (value) => Number.isFinite(value),
+    )
+  ) {
+    return fail(
+      'region_invalid',
+      `Region coordinates must be finite numbers; got x=${String(options.region.x)}, ` +
+        `y=${String(options.region.y)}, width=${String(options.region.width)}, ` +
+        `height=${String(options.region.height)}.`,
+    );
+  }
+  const dims = sniffImageDimensions(bytes);
+  if (dims && dims.width * dims.height > MAX_DECODE_PIXELS) {
+    return fail(
+      'too_large',
+      `The image (${String(dims.width)}x${String(dims.height)} pixels) is too large to decode for zooming.`,
+    );
+  }
+  if (bytes.length > maxDecodeBytes) {
+    return fail('too_large', 'The image is too large to decode for zooming.');
+  }
+
+  try {
+    const image = await decodeToJimp(bytes, normalizedMime);
+    const originalWidth = image.width;
+    const originalHeight = image.height;
+
+    let applied: ImageCropRegion = {
+      x: 0,
+      y: 0,
+      width: originalWidth,
+      height: originalHeight,
+    };
+    if (options.region !== undefined) {
+      const x = Math.floor(options.region.x);
+      const y = Math.floor(options.region.y);
+      if (
+        x < 0 ||
+        y < 0 ||
+        x >= originalWidth ||
+        y >= originalHeight ||
+        options.region.width < 1 ||
+        options.region.height < 1
+      ) {
+        return fail(
+          'out_of_bounds',
+          `Region (x=${String(options.region.x)}, y=${String(options.region.y)}, ` +
+            `width=${String(options.region.width)}, height=${String(options.region.height)}) ` +
+            `lies outside the ${String(originalWidth)}x${String(originalHeight)} image.`,
+        );
+      }
+      applied = {
+        x,
+        y,
+        width: Math.min(Math.floor(options.region.width), originalWidth - x),
+        height: Math.min(Math.floor(options.region.height), originalHeight - y),
+      };
+      image.crop({ x, y, w: applied.width, h: applied.height });
+    }
+
+    if (options.zoom !== undefined) {
+      let targetW = Math.max(1, Math.round(applied.width * options.zoom));
+      let targetH = Math.max(1, Math.round(applied.height * options.zoom));
+      const longest = Math.max(targetW, targetH);
+      if (longest > maxEdge) {
+        const cap = maxEdge / longest;
+        targetW = Math.max(1, Math.round(targetW * cap));
+        targetH = Math.max(1, Math.round(targetH * cap));
+      }
+      if (targetW !== applied.width || targetH !== applied.height) {
+        image.resize({ w: targetW, h: targetH });
+      }
+    } else {
+      fitWithinEdge(image, maxEdge);
+    }
+    const zoomFactor = image.width / applied.width;
+
+    const annotations = options.annotations ?? [];
+    if (annotations.length > 0) {
+      const annotationError = await drawAnnotations(image, annotations, zoomFactor);
+      if (annotationError !== undefined) {
+        return fail('annotation_invalid', annotationError);
+      }
+    }
+
+    const preferLossless = normalizedMime !== 'image/jpeg';
+    const encoded = await encodeWithinBudget(image, {
+      preferLossless,
+      byteBudget,
+      fallbackEdges: FALLBACK_EDGES_PX,
+    });
+    if (encoded.data.length > byteBudget) {
+      return fail(
+        'budget',
+        `The processed image encodes to ${String(encoded.data.length)} bytes ` +
+          `(${formatByteSize(encoded.data.length)}), over the ${String(byteBudget)}-byte ` +
+          `(${formatByteSize(byteBudget)}) per-image limit. ` +
+          'Reduce the zoom factor or choose a smaller region.',
+      );
+    }
+    return succeed({
+      ok: true,
+      data: new Uint8Array(encoded.data),
+      mimeType: encoded.mimeType,
+      width: encoded.width,
+      height: encoded.height,
+      originalWidth,
+      originalHeight,
+      region: applied,
+      zoom: zoomFactor,
+      annotationCount: annotations.length,
+      originalByteLength: bytes.length,
+      finalByteLength: encoded.data.length,
+    });
+  } catch (error) {
+    return fail(
+      'decode_failed',
+      `Failed to decode the image for zooming: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+}
+
 export interface ImageVariantDescription {
   readonly width: number;
   readonly height: number;
@@ -699,6 +932,310 @@ function fitWithinEdge(image: JimpImage, edge: number): boolean {
   return true;
 }
 
+const DEFAULT_ANNOTATION_COLORS = [0x00e5ffff, 0xff3b30ff, 0xff9500ff, 0xffd60aff] as const;
+
+const NAMED_ANNOTATION_COLORS: Readonly<Record<string, number>> = Object.freeze({
+  black: 0x000000ff,
+  white: 0xffffffff,
+  red: 0xff0000ff,
+  green: 0x008000ff,
+  lime: 0x00ff00ff,
+  blue: 0x0000ffff,
+  cyan: 0x00ffffff,
+  aqua: 0x00ffffff,
+  magenta: 0xff00ffff,
+  fuchsia: 0xff00ffff,
+  yellow: 0xffff00ff,
+  orange: 0xffa500ff,
+  purple: 0x800080ff,
+  pink: 0xffc0cbff,
+  gray: 0x808080ff,
+  grey: 0x808080ff,
+  silver: 0xc0c0c0ff,
+  teal: 0x008080ff,
+  navy: 0x000080ff,
+  maroon: 0x800000ff,
+  olive: 0x808000ff,
+  gold: 0xffd700ff,
+  violet: 0xee82eeff,
+  indigo: 0x4b0082ff,
+  brown: 0xa52a2aff,
+  coral: 0xff7f50ff,
+  salmon: 0xfa8072ff,
+  turquoise: 0x40e0d0ff,
+});
+
+const LABEL_BAND_COLOR = 0x000000ff;
+
+function parseAnnotationColor(value: string): number | undefined {
+  const text = value.trim().toLowerCase();
+  const named = NAMED_ANNOTATION_COLORS[text];
+  if (named !== undefined) return named;
+  const match = /^#([0-9a-f]{3,4}|[0-9a-f]{6}|[0-9a-f]{8})$/i.exec(text);
+  if (match === null) return undefined;
+  const hex = match[1]!;
+  if (hex.length <= 4) {
+    const r = hex[0]!;
+    const g = hex[1]!;
+    const b = hex[2]!;
+    const a = hex[3] ?? 'f';
+    return Number.parseInt(`${r}${r}${g}${g}${b}${b}${a}${a}`, 16);
+  }
+  const rgb = Number.parseInt(hex.slice(0, 6), 16);
+  const alpha = hex.length === 8 ? Number.parseInt(hex.slice(6, 8), 16) : 0xff;
+  return rgb * 256 + alpha;
+}
+
+function clampPixel(value: number, max: number): number {
+  return Math.min(Math.max(value, 0), Math.max(0, max));
+}
+
+function fillRect(
+  image: JimpImage,
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+  color: number,
+): void {
+  const x0 = Math.max(0, Math.floor(x));
+  const y0 = Math.max(0, Math.floor(y));
+  const x1 = Math.min(image.width, Math.ceil(x + width));
+  const y1 = Math.min(image.height, Math.ceil(y + height));
+  for (let py = y0; py < y1; py++) {
+    for (let px = x0; px < x1; px++) {
+      image.setPixelColor(color, px, py);
+    }
+  }
+}
+
+function drawThickLine(
+  image: JimpImage,
+  x0: number,
+  y0: number,
+  x1: number,
+  y1: number,
+  color: number,
+  thickness: number,
+): void {
+  const steps = Math.max(1, Math.ceil(Math.max(Math.abs(x1 - x0), Math.abs(y1 - y0))));
+  const half = (thickness - 1) / 2;
+  for (let step = 0; step <= steps; step++) {
+    const px = x0 + ((x1 - x0) * step) / steps;
+    const py = y0 + ((y1 - y0) * step) / steps;
+    fillRect(image, Math.round(px - half), Math.round(py - half), thickness, thickness, color);
+  }
+}
+
+function drawDot(
+  image: JimpImage,
+  cx: number,
+  cy: number,
+  radius: number,
+  color: number,
+): void {
+  const r = Math.max(1, Math.round(radius));
+  for (let dy = -r; dy <= r; dy++) {
+    const span = Math.floor(Math.sqrt(r * r - dy * dy));
+    fillRect(image, cx - span, cy + dy, span * 2 + 1, 1, color);
+  }
+}
+
+function drawBoxStroke(
+  image: JimpImage,
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+  color: number,
+  thickness: number,
+): void {
+  fillRect(image, x, y, width, thickness, color);
+  fillRect(image, x, y + height - thickness, width, thickness, color);
+  fillRect(image, x, y, thickness, height, color);
+  fillRect(image, x + width - thickness, y, thickness, height, color);
+}
+
+function drawArrow(
+  image: JimpImage,
+  from: ImageZoomPoint,
+  to: ImageZoomPoint,
+  color: number,
+  thickness: number,
+): void {
+  drawThickLine(image, from.x, from.y, to.x, to.y, color, thickness);
+  const angle = Math.atan2(to.y - from.y, to.x - from.x);
+  const headLength = Math.max(10, thickness * 5);
+  for (const offset of [-0.45, 0.45]) {
+    const tipAngle = angle + Math.PI + offset;
+    drawThickLine(
+      image,
+      to.x,
+      to.y,
+      to.x + headLength * Math.cos(tipAngle),
+      to.y + headLength * Math.sin(tipAngle),
+      color,
+      thickness,
+    );
+  }
+}
+
+interface LabelPainter {
+  readonly bandHeightGuess: number;
+  paint(image: JimpImage, anchorX: number, anchorY: number, text: string, bandColor: number): void;
+}
+
+async function createLabelPainter(longestEdge: number): Promise<LabelPainter> {
+  const [{ loadFont, measureText, measureTextHeight }, fonts] = await Promise.all([
+    import('jimp'),
+    import('jimp/fonts'),
+  ]);
+  const fontName =
+    longestEdge >= 1400
+      ? fonts.SANS_32_WHITE
+      : longestEdge >= 500
+        ? fonts.SANS_16_WHITE
+        : fonts.SANS_8_WHITE;
+  const font = await loadFont(fontName);
+  const pad = Math.max(2, Math.round(longestEdge / 400));
+  return {
+    bandHeightGuess: pad * 2 + (longestEdge >= 1400 ? 34 : longestEdge >= 500 ? 18 : 10),
+    paint(image, anchorX, anchorY, text, bandColor) {
+      const textWidth = Math.max(1, measureText(font, text));
+      const textHeight = Math.max(1, measureTextHeight(font, text, textWidth));
+      const bandWidth = textWidth + pad * 2;
+      const bandHeight = textHeight + pad * 2;
+      const bx = clampPixel(Math.round(anchorX), image.width - bandWidth);
+      const by = clampPixel(Math.round(anchorY), image.height - bandHeight);
+      fillRect(image, bx, by, bandWidth, bandHeight, bandColor);
+      image.print({ font, x: bx + pad, y: by + pad, text });
+    },
+  };
+}
+
+function annotationCoordsFinite(annotation: ImageZoomAnnotation): boolean {
+  switch (annotation.type) {
+    case 'arrow':
+      return [annotation.from.x, annotation.from.y, annotation.to.x, annotation.to.y].every(
+        (value) => Number.isFinite(value),
+      );
+    case 'box':
+      return [annotation.x, annotation.y, annotation.width, annotation.height].every((value) =>
+        Number.isFinite(value),
+      );
+    case 'dot':
+      return [annotation.x, annotation.y, annotation.radius ?? 1].every((value) =>
+        Number.isFinite(value),
+      );
+    case 'label':
+      return [annotation.x, annotation.y].every((value) => Number.isFinite(value));
+  }
+}
+
+function describeAnnotationColorError(index: number, color: string): string {
+  return (
+    `Unknown color "${color}" in annotation ${String(index + 1)}. ` +
+    'Use a named color (for example "red", "cyan", "orange") or a hex string like "#ff8800".'
+  );
+}
+
+async function drawAnnotations(
+  image: JimpImage,
+  annotations: readonly ImageZoomAnnotation[],
+  zoomFactor: number,
+): Promise<string | undefined> {
+  const longest = Math.max(image.width, image.height);
+  const stroke = Math.min(8, Math.max(2, Math.round(longest / 500)));
+  const needsText = annotations.some(
+    (annotation) =>
+      annotation.type === 'label' ||
+      ('label' in annotation && annotation.label !== undefined),
+  );
+  const painter = needsText ? await createLabelPainter(longest) : undefined;
+
+  for (let index = 0; index < annotations.length; index++) {
+    const annotation = annotations[index]!;
+    if (!annotationCoordsFinite(annotation)) {
+      return `Coordinates of annotation ${String(index + 1)} (${annotation.type}) must be finite numbers.`;
+    }
+    const fallbackColor = DEFAULT_ANNOTATION_COLORS[index % DEFAULT_ANNOTATION_COLORS.length]!;
+    const color =
+      annotation.type === 'label' && annotation.color === undefined
+        ? LABEL_BAND_COLOR
+        : annotation.color === undefined
+          ? fallbackColor
+          : parseAnnotationColor(annotation.color);
+    if (color === undefined) {
+      return describeAnnotationColorError(index, annotation.color ?? '');
+    }
+
+    const scale = (value: number): number => value * zoomFactor;
+    switch (annotation.type) {
+      case 'arrow': {
+        const from = { x: scale(annotation.from.x), y: scale(annotation.from.y) };
+        const to = { x: scale(annotation.to.x), y: scale(annotation.to.y) };
+        drawArrow(image, from, to, color, stroke);
+        if (annotation.label !== undefined) {
+          painter?.paint(
+            image,
+            (from.x + to.x) / 2 + stroke + 1,
+            (from.y + to.y) / 2 + stroke + 1,
+            annotation.label,
+            LABEL_BAND_COLOR,
+          );
+        }
+        break;
+      }
+      case 'box': {
+        if (annotation.width < 1 || annotation.height < 1) {
+          return `Box annotation ${String(index + 1)} width and height must be at least 1.`;
+        }
+        const bx = scale(annotation.x);
+        const by = scale(annotation.y);
+        const bw = scale(annotation.width);
+        const bh = scale(annotation.height);
+        drawBoxStroke(image, bx, by, bw, bh, color, stroke);
+        if (annotation.label !== undefined) {
+          painter?.paint(image, bx + stroke + 1, by + stroke + 1, annotation.label, LABEL_BAND_COLOR);
+        }
+        break;
+      }
+      case 'dot': {
+        if (annotation.radius !== undefined && annotation.radius <= 0) {
+          return `Dot annotation ${String(index + 1)} radius must be positive.`;
+        }
+        const dx = scale(annotation.x);
+        const dy = scale(annotation.y);
+        const radius = scale(annotation.radius ?? Math.max(4, stroke * 3));
+        drawDot(image, dx, dy, radius, color);
+        if (annotation.label !== undefined) {
+          painter?.paint(image, dx + radius + stroke, dy, annotation.label, LABEL_BAND_COLOR);
+        }
+        break;
+      }
+      case 'label': {
+        if (annotation.text.length === 0) {
+          return `Label annotation ${String(index + 1)} text must not be empty.`;
+        }
+        painter?.paint(image, scale(annotation.x), scale(annotation.y), annotation.text, color);
+        break;
+      }
+    }
+  }
+  return undefined;
+}
+
+type ZoomErrorKind =
+  | 'empty'
+  | 'unsupported_format'
+  | 'zoom_invalid'
+  | 'region_invalid'
+  | 'annotation_invalid'
+  | 'too_large'
+  | 'out_of_bounds'
+  | 'budget'
+  | 'decode_failed';
+
 type CropErrorKind =
   | 'empty'
   | 'unsupported_format'
@@ -773,6 +1310,35 @@ function reportCropEvent(
         result === undefined || originalPixels === 0
           ? undefined
           : (result.region.width * result.region.height) / originalPixels,
+      final_bytes: result?.finalByteLength,
+      duration_ms: Date.now() - input.startedAt,
+    });
+  } catch {
+  }
+}
+
+function reportZoomEvent(
+  telemetry: ImageCompressionTelemetry | undefined,
+  input: {
+    readonly startedAt: number;
+    readonly ok: boolean;
+    readonly errorKind?: ZoomErrorKind;
+    readonly result?: ZoomImageSuccess;
+  },
+): void {
+  if (telemetry === undefined) return;
+  try {
+    const { result } = input;
+    telemetry.client.track('image_zoom', {
+      source: telemetry.source,
+      ok: input.ok,
+      error_kind: input.errorKind,
+      zoom: result?.zoom,
+      annotations: result?.annotationCount,
+      original_width: result?.originalWidth,
+      original_height: result?.originalHeight,
+      final_width: result?.width,
+      final_height: result?.height,
       final_bytes: result?.finalByteLength,
       duration_ms: Date.now() - input.startedAt,
     });

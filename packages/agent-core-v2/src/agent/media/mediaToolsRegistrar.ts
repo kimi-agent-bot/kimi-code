@@ -18,6 +18,7 @@ import { extendWorkspaceWithSkillRoots } from '#/tool/path-access';
 
 import { IAgentMediaToolsRegistrar } from './mediaTools';
 import { createVideoUploader, registerMediaTools } from './registerMediaTools';
+import { ISessionMediaStore } from './sessionMediaStore';
 
 export const mediaRegisteredKeyKey = defineState<string | undefined>(
   'media.registeredKey',
@@ -39,6 +40,7 @@ export class AgentMediaToolsRegistrar extends Service implements IAgentMediaTool
     @ITelemetryService private readonly telemetry: ITelemetryService,
     @IAgentStateService private readonly states: IAgentStateService,
     @ISessionSkillCatalog private readonly skillCatalog?: ISessionSkillCatalog,
+    @ISessionMediaStore private readonly mediaStore?: ISessionMediaStore,
   ) {
     super();
     this.states.contributeState(mediaRegisteredKeyKey);
@@ -130,6 +132,7 @@ export class AgentMediaToolsRegistrar extends Service implements IAgentMediaTool
       }),
       inlineVideoSupported: model?.protocol !== 'openai' && model?.protocol !== 'openai_responses',
       telemetry: this.telemetry,
+      mediaStore: this.mediaStore,
     });
   }
 }

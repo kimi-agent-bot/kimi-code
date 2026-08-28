@@ -3,12 +3,14 @@ import type { ModelRequester } from '#/kosong/model/modelRequester';
 import type { VideoUploadEvent } from '#/app/telemetry/events';
 import type { ITelemetryService } from '#/app/telemetry/telemetry';
 
-import { toDisposable, type IDisposable } from '#/_base/di/lifecycle';
+import { combinedDisposable, toDisposable, type IDisposable } from '#/_base/di/lifecycle';
 import type { WorkspaceConfig } from '#/tool/path-access';
 import type { IAgentRuntimeService } from '#/agent/runtimeBinding/agentRuntime';
 import type { IAgentToolRegistryService } from '#/agent/toolRegistry/toolRegistry';
 import { ReadMediaFileTool } from '#/agent/tools/read-media-file/readMediaFileTool';
 import type { VideoUploader } from '#/agent/tools/read-media-file/read-media-file';
+import { ImageZoomTool } from '#/agent/tools/image-zoom/imageZoomTool';
+import type { ISessionMediaStore } from './sessionMediaStore';
 
 export interface RegisterMediaToolsDeps {
   readonly runtime: IAgentRuntimeService;
@@ -17,6 +19,7 @@ export interface RegisterMediaToolsDeps {
   readonly videoUploader?: VideoUploader;
   readonly telemetry?: ITelemetryService;
   readonly inlineVideoSupported?: boolean;
+  readonly mediaStore?: ISessionMediaStore;
 }
 
 export function registerMediaTools(
@@ -29,16 +32,32 @@ export function registerMediaTools(
   ) {
     return toDisposable(() => {});
   }
-  return toolRegistry.register(
-    new ReadMediaFileTool(
-      deps.runtime,
-      deps.workspace,
-      deps.capabilities,
-      deps.videoUploader,
-      deps.telemetry,
-      deps.inlineVideoSupported,
+  const registrations: IDisposable[] = [
+    toolRegistry.register(
+      new ReadMediaFileTool(
+        deps.runtime,
+        deps.workspace,
+        deps.capabilities,
+        deps.videoUploader,
+        deps.telemetry,
+        deps.inlineVideoSupported,
+      ),
     ),
-  );
+  ];
+  if (deps.capabilities.image_in) {
+    registrations.push(
+      toolRegistry.register(
+        new ImageZoomTool(
+          deps.runtime,
+          deps.workspace,
+          deps.capabilities,
+          deps.mediaStore,
+          deps.telemetry,
+        ),
+      ),
+    );
+  }
+  return combinedDisposable(...registrations);
 }
 
 export function createVideoUploader(
