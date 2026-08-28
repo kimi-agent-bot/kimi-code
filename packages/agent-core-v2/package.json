@@ -75,6 +75,7 @@
     "linkedom": "^0.18.12",
     "node-pty": "^1.1.0",
     "openai": "^6.34.0",
+    "opentype.js": "^2.0.0",
     "pathe": "^2.0.3",
     "picomatch": "^4.0.4",
     "retry": "0.13.1",

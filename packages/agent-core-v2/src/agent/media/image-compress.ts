@@ -12,6 +12,7 @@ import {
   resolveEffectiveImageMime,
   unsupportedImageMimeFromUrl,
 } from './image-format-policy';
+import { drawTtfText, measureTtfText, resolveAnnotationFont } from './ttfText';
 import { decodeWebp, isAnimatedWebp } from './webp-decode';
 
 export const MAX_IMAGE_EDGE_PX = 2000;
@@ -1086,6 +1087,23 @@ interface LabelPainter {
 }
 
 async function createLabelPainter(longestEdge: number): Promise<LabelPainter> {
+  const pad = Math.max(2, Math.round(longestEdge / 400));
+  const ttfFont = await resolveAnnotationFont();
+  if (ttfFont !== undefined) {
+    const size = longestEdge >= 1400 ? 36 : longestEdge >= 500 ? 20 : 12;
+    return {
+      bandHeightGuess: pad * 2 + Math.ceil(measureTtfText(ttfFont, 'Ag', size).height),
+      paint(image, anchorX, anchorY, text, bandColor) {
+        const metrics = measureTtfText(ttfFont, text, size);
+        const bandWidth = Math.max(1, Math.ceil(metrics.width) + pad * 2);
+        const bandHeight = Math.max(1, Math.ceil(metrics.height) + pad * 2);
+        const bx = clampPixel(Math.round(anchorX), image.width - bandWidth);
+        const by = clampPixel(Math.round(anchorY), image.height - bandHeight);
+        fillRect(image, bx, by, bandWidth, bandHeight, bandColor);
+        drawTtfText(image, ttfFont, { x: bx + pad, y: by + pad, text, size, color: 0xffffffff });
+      },
+    };
+  }
   const [{ loadFont, measureText, measureTextHeight }, fonts] = await Promise.all([
     import('jimp'),
     import('jimp/fonts'),
@@ -1097,7 +1115,6 @@ async function createLabelPainter(longestEdge: number): Promise<LabelPainter> {
         ? fonts.SANS_16_WHITE
         : fonts.SANS_8_WHITE;
   const font = await loadFont(fontName);
-  const pad = Math.max(2, Math.round(longestEdge / 400));
   return {
     bandHeightGuess: pad * 2 + (longestEdge >= 1400 ? 34 : longestEdge >= 500 ? 18 : 10),
     paint(image, anchorX, anchorY, text, bandColor) {
