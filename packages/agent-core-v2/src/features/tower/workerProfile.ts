@@ -31,6 +31,7 @@ const TOWER_WORKER_TOOLS = [
   'Grep',
   'Read',
   'ReadMediaFile',
+  'ImageZoom',
   'Skill',
   'TaskList',
   'TaskOutput',
