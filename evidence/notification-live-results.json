@@ -1,0 +1,34 @@
+{
+  "scenario": "真实 kap-server + packaged Kimi Code Web；后台 Bash 完成后自动开启 task-origin 回合",
+  "before": {
+    "commit": "d18a7bcd319dcc166df031b9c7e32113a58a70b5",
+    "live": {
+      "busy": true,
+      "notificationCards": 0,
+      "taskPromptPresent": false,
+      "modelReceivedNotification": true,
+      "skillVisible": true
+    },
+    "afterHeal": {
+      "busy": false,
+      "notificationCards": 1
+    },
+    "assertionFailures": []
+  },
+  "after": {
+    "commit": "650415b60e29a1dfa91496039680fe86e791ee79",
+    "live": {
+      "busy": true,
+      "notificationCards": 1,
+      "taskPromptPresent": true,
+      "modelReceivedNotification": true,
+      "skillVisible": true
+    },
+    "afterHeal": {
+      "busy": false,
+      "notificationCards": 1
+    },
+    "assertionFailures": []
+  },
+  "note": "图像由上述两次实测的原始 UI 截图组成，仅裁剪空白区域。"
+}
